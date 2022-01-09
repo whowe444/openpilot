@@ -3,15 +3,17 @@ import os
 import time
 import psutil
 from typing import Optional
+from selfdrive.hardware import EON, TICI
 
 from common.realtime import set_core_affinity, set_realtime_priority
 from selfdrive.swaglog import cloudlog
 
-
-MAX_MODEM_CRASHES = 3
-MODEM_PATH = "/sys/devices/soc/2080000.qcom,mss/subsys5"
-WATCHED_PROCS = ["zygote", "zygote64", "/system/bin/servicemanager", "/system/bin/surfaceflinger"]
-
+if EON:
+  MAX_MODEM_CRASHES = 3
+  MODEM_PATH = "/sys/devices/soc/2080000.qcom,mss/subsys5"
+  WATCHED_PROCS = ["zygote", "zygote64", "/system/bin/servicemanager", "/system/bin/surfaceflinger"]
+elif TICI:
+  pass
 
 def get_modem_crash_count() -> Optional[int]:
   try:
@@ -38,19 +40,20 @@ def main():
   modem_killed = False
   modem_state = "ONLINE"
   while True:
-    # check critical android services
-    if any(p is None or not p.is_running() for p in procs.values()) or not len(procs):
-      cur = {p: None for p in WATCHED_PROCS}
-      for p in psutil.process_iter(attrs=['cmdline']):
-        cmdline = None if not len(p.info['cmdline']) else p.info['cmdline'][0]
-        if cmdline in WATCHED_PROCS:
-          cur[cmdline] = p
+    if EON:
+      # check critical android services
+      if any(p is None or not p.is_running() for p in procs.values()) or not len(procs):
+        cur = {p: None for p in WATCHED_PROCS}
+        for p in psutil.process_iter(attrs=['cmdline']):
+          cmdline = None if not len(p.info['cmdline']) else p.info['cmdline'][0]
+          if cmdline in WATCHED_PROCS:
+            cur[cmdline] = p
 
-      if len(procs):
-        for p in WATCHED_PROCS:
-          if cur[p] != procs[p]:
-            cloudlog.event("android service pid changed", proc=p, cur=cur[p], prev=procs[p])
-      procs.update(cur)
+        if len(procs):
+          for p in WATCHED_PROCS:
+            if cur[p] != procs[p]:
+              cloudlog.event("android service pid changed", proc=p, cur=cur[p], prev=procs[p])
+        procs.update(cur)
 
     if os.path.exists(MODEM_PATH):
       # check modem state
@@ -69,8 +72,11 @@ def main():
       # handle excessive modem crashes
       if crash_count > MAX_MODEM_CRASHES and not modem_killed:
         cloudlog.event("killing modem")
-        with open("/sys/kernel/debug/msm_subsys/modem", "w") as f:
-          f.write("put")
+        if EON:
+          with open("/sys/kernel/debug/msm_subsys/modem", "w") as f:
+            f.write("put")
+        elif TICI:
+         pass
         modem_killed = True
 
     time.sleep(1)
